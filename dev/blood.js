@@ -146,6 +146,13 @@
 
     blood_update_ready: () => (updateReady ? 1 : 0),
     blood_reload: () => location.reload(),
+    // An installed app closes; a browser tab that cannot goes back to where
+    // the player came from.
+    blood_quit: () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      window.close();
+      setTimeout(() => { if (history.length > 1) history.back(); }, 150);
+    },
   };
 
   miniquad_add_plugin({ register_plugin: (o) => Object.assign(o.env, env), name: "blood", version: 1 });
