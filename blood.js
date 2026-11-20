@@ -23,11 +23,12 @@
   // Storage: the game's paths are keys under one prefix.
   const PREFIX = "be:";
 
-  // AI workers run the same module. Worker 0 takes only plans (the enemy
-  // never waits behind a win-chance playout); the rest take plans first.
+  // AI workers run the same module. Worker 0 takes only the battle's plans
+  // (the enemy never waits behind a win-chance playout or a background
+  // tournament match, group 1); the rest take plans, then those, then playouts.
   let module = null;
   const pool = [];
-  const plans = [], playouts = [];
+  const plans = [], later = [], playouts = [];
   const PLAN = 1;
 
   function spawn(i) {
@@ -51,7 +52,7 @@
     for (let i = 0; i < pool.length; i++) {
       const s = pool[i];
       if (s.job) continue;
-      const job = plans.shift() || (i > 0 ? playouts.shift() : undefined);
+      const job = plans.shift() || (i > 0 ? later.shift() || playouts.shift() : undefined);
       if (!job) continue;
       s.job = job;
       s.w.postMessage({ kind: job.kind, input: job.input }, [job.input.buffer]);
@@ -96,7 +97,7 @@
 
     blood_job: (kind, group, p, l) => {
       const id = begin();
-      (kind === PLAN ? plans : playouts).push({ id, kind, group, input: view(p, l).slice() });
+      (kind === PLAN ? (group ? later : plans) : playouts).push({ id, kind, group, input: view(p, l).slice() });
       if (module) dispatch();
       return id;
     },
