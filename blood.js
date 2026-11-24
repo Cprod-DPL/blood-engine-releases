@@ -21,7 +21,62 @@
   const finish = (id, out) => { const r = results.get(id); if (r) { r.status = out ? out.length : -2; r.out = out; } };
 
   // Storage: the game's paths are keys under one prefix.
+  window.addEventListener("pagehide", () => { if (typeof wasm_exports !== "undefined") wasm_exports?.blood_climb_hide?.(); });
   const PREFIX = "be:";
+  // One active game socket; stale events never reach a replacement room.
+  const sockets = new Map();
+  const socketEnv = {
+    blood_ws_manual: () => ["127.0.0.1","localhost"].includes(location.hostname)&&new URLSearchParams(location.search).has("manual-lobby")?1:0,
+    blood_ws_clock: () => performance.now(),
+    blood_ws_review: p => {
+      if (!["127.0.0.1","localhost"].includes(location.hostname)) return 0;
+      const code=new URLSearchParams(location.search).get("battle-check")||"";
+      if (code!=="resume" && !/^[A-HJ-NP-Z2-9]{6}$/.test(code)) return 0;
+      view(p,6).set(enc.encode(code)); return 6;
+    },
+    blood_ws_open: (p,n) => {
+      const id = nextId++, ws = new WebSocket(str(p,n)), q = [];
+      ws.binaryType = "arraybuffer"; sockets.set(id,{ws,q});
+      ws.onmessage = e => {
+        if (!(e.data instanceof ArrayBuffer) || e.data.byteLength > 65536 || q.length >= 32) { ws.close(); return; }
+        const bytes=new Uint8Array(e.data);
+        if(bytes.length===1&&bytes[0]===72){ws.send(Uint8Array.of(73));return;} // also answer in a background tab
+        q.push(bytes);
+      };
+      ws.onclose = () => q.push(new Uint8Array()); return id;
+    },
+    blood_ws_send: (id,p,n) => {
+      const ws=sockets.get(id)?.ws;
+      if (ws?.readyState!==WebSocket.OPEN || ws.bufferedAmount>4096) return 0;
+      const bytes=view(p,n);
+      if(n===14 && bytes[0]===2){
+        const ack=bytes.slice();
+        bloodJournal.flush().then(ok=>{
+          if(ws.readyState!==WebSocket.OPEN)return;
+          if(ok)ws.send(ack);else{ws.send(Uint8Array.of(69));}
+        });
+      }else ws.send(bytes);
+      return 1;
+    },
+    blood_ws_size: id => sockets.get(id)?.q[0]?.length ?? -1,
+    blood_ws_poll: (id,p) => {
+      const b=sockets.get(id)?.q.shift(); if (!b) return -1;
+      view(p,b.length).set(b); return b.length;
+    },
+    blood_ws_close: id => {const s=sockets.get(id); if(s){s.ws.close(); sockets.delete(id);}},
+  };
+
+  // Stage only the latest committed position in memory. Leaving the page saves it;
+  // an ordinary resume consumes the stored game before input is enabled.
+  const adventureKey = PREFIX + "BloodEngine/adventure.sav";
+  let adventure = "";
+  window.addEventListener("pagehide", () => {
+    if (adventure) localStorage.setItem(adventureKey, adventure);
+  });
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted && adventure && localStorage.getItem(adventureKey) === adventure)
+      localStorage.removeItem(adventureKey);
+  });
 
   // AI workers run the same module. Worker 0 takes only the battle's plans
   // (the enemy never waits behind a win-chance playout or a background
@@ -70,15 +125,16 @@
 
   const env = {
     blood_now: () => performance.now(),
+    blood_adventure_stage: (p, n) => { adventure = str(p, n); },
 
     blood_store_get: (k, kl) => {
       const v = localStorage.getItem(PREFIX + str(k, kl));
       return v === null ? -1 : park(enc.encode(v));
     },
     blood_store_set: (k, kl, v, vl) => {
-      try { localStorage.setItem(PREFIX + str(k, kl), str(v, vl)); return 1; } catch (_) { return 0; }
+      try { const key=PREFIX+str(k,kl), value=str(v,vl); if(!bloodJournal.changed(key,value))return 0;localStorage.setItem(key,value);return 1; } catch (_) { return 0; }
     },
-    blood_store_del: (k, kl) => localStorage.removeItem(PREFIX + str(k, kl)),
+    blood_store_del: (k, kl) => {const key=PREFIX+str(k,kl);bloodJournal.changed(key,null);localStorage.removeItem(key);},
     blood_store_keys: (p, pl) => {
       const pre = PREFIX + str(p, pl);
       const out = [];
@@ -156,13 +212,13 @@
     },
   };
 
-  miniquad_add_plugin({ register_plugin: (o) => Object.assign(o.env, env), name: "blood", version: 1 });
+  miniquad_add_plugin({ register_plugin: (o) => Object.assign(o.env, env, socketEnv), name: "blood", version: 1 });
 
   // gl.js's load(), compiling once so the workers share the module.
   window.blood_load = (url) => {
     register_plugins(plugins);
-    WebAssembly.compileStreaming(fetch(url))
-      .then((m) => {
+    Promise.all([WebAssembly.compileStreaming(fetch(url)),bloodJournal.open()])
+      .then(([m]) => {
         module = m;
         const n = Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
         for (let i = 0; i < n; i++) spawn(i);
