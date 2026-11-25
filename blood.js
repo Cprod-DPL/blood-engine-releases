@@ -26,6 +26,7 @@
   // One active game socket; stale events never reach a replacement room.
   const sockets = new Map();
   const socketEnv = {
+    blood_ws_port: () => ["127.0.0.1","localhost"].includes(location.hostname) ? Number(new URLSearchParams(location.search).get("lobby-port"))||0 : 0,
     blood_ws_manual: () => ["127.0.0.1","localhost"].includes(location.hostname)&&new URLSearchParams(location.search).has("manual-lobby")?1:0,
     blood_ws_clock: () => performance.now(),
     blood_ws_review: p => {
@@ -38,9 +39,11 @@
       const id = nextId++, ws = new WebSocket(str(p,n)), q = [];
       ws.binaryType = "arraybuffer"; sockets.set(id,{ws,q});
       ws.onmessage = e => {
-        if (!(e.data instanceof ArrayBuffer) || e.data.byteLength > 65536 || q.length >= 32) { ws.close(); return; }
+        if (!(e.data instanceof ArrayBuffer) || e.data.byteLength > 65536) { ws.close(); return; }
         const bytes=new Uint8Array(e.data);
         if(bytes.length===1&&bytes[0]===72){ws.send(Uint8Array.of(73));return;} // also answer in a background tab
+        if(bytes.length===1 && bytes[0]===75 && q.some(old=>old.length===1&&old[0]===75))return;
+        if(q.length>=32){ws.close();return;}
         q.push(bytes);
       };
       ws.onclose = () => q.push(new Uint8Array()); return id;
@@ -49,7 +52,7 @@
       const ws=sockets.get(id)?.ws;
       if (ws?.readyState!==WebSocket.OPEN || ws.bufferedAmount>4096) return 0;
       const bytes=view(p,n);
-      if(n===14 && bytes[0]===2){
+      if((n===14 && bytes[0]===2) || bytes[0]===19 || bytes[0]===23 || bytes[0]===81 || bytes[0]===85 || bytes[0]===66){
         const ack=bytes.slice();
         bloodJournal.flush().then(ok=>{
           if(ws.readyState!==WebSocket.OPEN)return;
@@ -153,7 +156,7 @@
 
     blood_job: (kind, group, p, l) => {
       const id = begin();
-      (kind === PLAN ? (group ? later : plans) : playouts).push({ id, kind, group, input: view(p, l).slice() });
+      (kind === 3 ? later : kind === PLAN ? (group ? later : plans) : playouts).push({ id, kind, group, input: view(p, l).slice() });
       if (module) dispatch();
       return id;
     },

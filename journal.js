@@ -3,7 +3,7 @@
 // latest batch when the browser process is killed. The relay ACK waits for the
 // strict transaction, not just the localStorage write. No timer or polling.
 const bloodJournal = (() => {
-  const keys = ["online-a.sav", "online-b.sav", "online-slot.txt", "online-room.txt"].map(
+  const keys = ["online-a.sav", "online-b.sav", "online-slot.txt", "online-room.txt","tournament-room.txt","campaign-room.txt","lobby-seat.txt"].map(
     (k) => "be:BloodEngine/" + k,
   );
   const dirty = new Map();
